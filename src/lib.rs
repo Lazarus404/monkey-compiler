@@ -1,4 +1,4 @@
-// pub mod code;
+pub mod code;
 pub mod evaluator;
 pub mod lexer;
 pub mod parser;

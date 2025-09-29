@@ -1,11 +1,13 @@
 extern crate monkey;
 
+use monkey::compiler::Compiler;
 use monkey::evaluator::builtins::new_builtins;
 use monkey::evaluator::env::Env;
 use monkey::evaluator::object::Object;
 use monkey::evaluator::Evaluator;
 use monkey::lexer::Lexer;
 use monkey::parser::Parser;
+use monkey::vm::VM;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::cell::RefCell;
@@ -36,8 +38,6 @@ fn main() {
 
                 let mut parser = Parser::new(Lexer::new(&line));
                 let mut program = parser.parse();
-                evaluator.define_macros(&mut program);
-                let expanded = evaluator.expand_macros(program);
                 let errors = parser.errors();
 
                 if errors.len() > 0 {
@@ -47,9 +47,25 @@ fn main() {
                     continue;
                 }
 
-                if let Some(evaluated) = evaluator.eval(expanded) {
-                    println!("{}\n", evaluated);
+                evaluator.define_macros(&mut program);
+                let expanded = evaluator.expand_macros(program);
+                
+                let mut compiler = Compiler::new();
+                if let Err(e) = compiler.compile(&expanded) {
+                    println!("Compiler error: {}", e);
+                    continue;
                 }
+                
+                let bytecode = compiler.bytecode();
+                let mut vm = VM::new(&bytecode);
+                
+                if let Err(e) = vm.run() {
+                    println!("VM error: {}", e);
+                    continue;
+                }
+
+                let stack_top = vm.last_popped_stack_elem();
+                println!("{}\n", stack_top);
             }
             Err(ReadlineError::Interrupted) => {
                 println!("\nExiting...");

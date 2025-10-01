@@ -48,6 +48,8 @@ pub const OPPOP: Opcode = 16;
 pub const OPJUMPELSE: Opcode = 17;
 pub const OPJUMP: Opcode = 18;
 pub const OPNULL: Opcode = 19;
+pub const OPGETGLOBAL: Opcode = 20;
+pub const OPSETGLOBAL: Opcode = 21;
 
 pub struct Definition {
     pub name: String,
@@ -136,6 +138,14 @@ static DEFINITIONS: Lazy<std::collections::HashMap<Opcode, Definition>> = Lazy::
     m.insert(OPNULL, Definition {
         name: "OpNull".to_string(),
         operand_widths: vec![],
+    });
+    m.insert(OPGETGLOBAL, Definition {
+        name: "OpGetGlobal".to_string(),
+        operand_widths: vec![2],
+    });
+    m.insert(OPSETGLOBAL, Definition {
+        name: "OpSetGlobal".to_string(),
+        operand_widths: vec![2],
     });
     m
 });

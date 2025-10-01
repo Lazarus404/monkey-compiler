@@ -1,3 +1,8 @@
+pub mod symbol_table;
+use symbol_table::SymbolTable;
+use std::rc::Rc;
+use std::cell::RefCell;
+
 use crate::parser::ast;
 use crate::code::{
     self, 
@@ -22,24 +27,38 @@ use crate::code::{
     OPPOP,
     OPJUMPELSE,
     OPJUMP,
-    OPNULL
+    OPNULL,
+    OPGETGLOBAL,
+    OPSETGLOBAL
 };
 use crate::evaluator::object::Object;
 
 pub struct Compiler {
     pub instructions: Instructions,
-    pub constants: Vec<Object>,
+    pub constants: Rc<RefCell<Vec<Object>>>,
     last_instruction: EmittedInstruction,
     previous_instruction: EmittedInstruction,
+    symbol_table: Rc<RefCell<SymbolTable>>,
 }
 
 impl Compiler {
     pub fn new() -> Self {
         Compiler {
             instructions: Instructions::new(),
-            constants: Vec::new(),
+            constants: Rc::new(RefCell::new(vec![])),
             last_instruction: EmittedInstruction::new(),
             previous_instruction: EmittedInstruction::new(),
+            symbol_table: Rc::new(RefCell::new(SymbolTable::new())),
+        }
+    }
+
+    pub fn new_with_state(symbol_table: Rc<RefCell<SymbolTable>>, constants: Rc<RefCell<Vec<Object>>>) -> Self {
+        Compiler {
+            instructions: Instructions::new(),
+            constants: constants,
+            last_instruction: EmittedInstruction::new(),
+            previous_instruction: EmittedInstruction::new(),
+            symbol_table: symbol_table,
         }
     }
 
@@ -55,6 +74,11 @@ impl Compiler {
             ast::Stmt::Expr(expr) => {
                 self.compile_expr(expr)?;
                 self.emit(OPPOP, &[]);
+            }
+            ast::Stmt::Let(ident, expr) => {
+                self.compile_expr(expr)?;
+                let symbol = self.symbol_table.borrow_mut().define(&ident.0);
+                self.emit(OPSETGLOBAL, &[symbol.index as i32]);
             }
             _ => {
                 return Err(format!("unsupported statement: {:?}", stmt));
@@ -166,6 +190,22 @@ impl Compiler {
                 let after_alternative_pos = self.instructions.len();
                 self.change_operand(jump_pos, after_alternative_pos as i32);
             }
+            ast::Expr::Ident(ident) => {
+                let symbol_index = {
+                    let symbol_table = self.symbol_table.borrow();
+                    let symbol = symbol_table.resolve(&ident.0);
+                    if let Some(symbol) = symbol {
+                        Some(symbol.index)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(index) = symbol_index {
+                    self.emit(OPGETGLOBAL, &[index as i32]);
+                } else {
+                    return Err(format!("undefined variable: {}", ident.0));
+                }
+            }
             _ => {
                 return Err(format!("unsupported expression: {:?}", expr));
             }
@@ -176,13 +216,13 @@ impl Compiler {
     pub fn bytecode(&self) -> Bytecode {
         Bytecode {
             instructions: self.instructions.clone(),
-            constants: self.constants.clone(),
+            constants: self.constants.borrow().clone(),
         }
     }
 
     pub fn add_constant(&mut self, obj: Object) -> usize {
-        self.constants.push(obj);
-        self.constants.len() - 1
+        self.constants.borrow_mut().push(obj);
+        self.constants.borrow().len() - 1
     }
 
     pub fn emit(&mut self, op: Opcode, operands: &[i32]) -> usize {
@@ -277,7 +317,9 @@ mod tests {
         OPMINUS, 
         OPPLUS, 
         OPBANG, 
-        OPPOP
+        OPPOP,
+        OPGETGLOBAL,
+        OPSETGLOBAL
     };
 
     struct CompilerTestCase<'a> {
@@ -467,6 +509,56 @@ mod tests {
                 expected_instructions: vec![
                     code::make(OPTRUE, &[]),
                     code::make(OPBANG, &[]),
+                    code::make(OPPOP, &[]),
+                ],
+            },
+        ];
+
+        run_compiler_tests(tests);
+    }
+
+    #[test]
+    fn test_global_let_statements() {
+        let tests = vec![
+            CompilerTestCase {
+                input: "
+                let one = 1;
+                let two = 2;
+                ",
+                expected_constants: vec![1, 2],
+                expected_instructions: vec![
+                    code::make(OPCONSTANT, &[0]),
+                    code::make(OPSETGLOBAL, &[0]),
+                    code::make(OPCONSTANT, &[1]),
+                    code::make(OPSETGLOBAL, &[1]),
+                ],
+            },
+            CompilerTestCase {
+                input: "
+                let one = 1;
+                one;
+                ",
+                expected_constants: vec![1],
+                expected_instructions: vec![
+                    code::make(OPCONSTANT, &[0]),
+                    code::make(OPSETGLOBAL, &[0]),
+                    code::make(OPGETGLOBAL, &[0]),
+                    code::make(OPPOP, &[]),
+                ],
+            },
+            CompilerTestCase {
+                input: "
+                let one = 1;
+                let two = one;
+                two;
+                ",
+                expected_constants: vec![1],
+                expected_instructions: vec![
+                    code::make(OPCONSTANT, &[0]),
+                    code::make(OPSETGLOBAL, &[0]),
+                    code::make(OPGETGLOBAL, &[0]),
+                    code::make(OPSETGLOBAL, &[1]),
+                    code::make(OPGETGLOBAL, &[1]),
                     code::make(OPPOP, &[]),
                 ],
             },

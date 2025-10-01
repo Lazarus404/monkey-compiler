@@ -1,3 +1,5 @@
+use std::rc::Rc;
+use std::cell::RefCell;
 use crate::code::{
     Instructions, 
     OPCONSTANT, 
@@ -20,12 +22,15 @@ use crate::code::{
     OPJUMPELSE,
     OPJUMP,
     OPNULL,
+    OPSETGLOBAL,
+    OPGETGLOBAL,
     read_u16, 
 };
 use crate::compiler::Bytecode;
 use crate::evaluator::object::Object;
 
-const STACK_SIZE: usize = 2048;
+pub const STACK_SIZE: usize = 2048;
+pub const GLOBAL_SIZE: usize = 65536;
 
 pub const TRUE: Object = Object::Bool(true);
 pub const FALSE: Object = Object::Bool(false);
@@ -34,6 +39,7 @@ pub const FALSE: Object = Object::Bool(false);
 pub struct VM {
     pub constants: Vec<Object>,
     pub instructions: Instructions,
+    pub globals: Rc<RefCell<Vec<Object>>>,
 
     stack: Vec<Object>,
     sp: usize, // Always points to the next value. Top of stack is stack[sp-1]
@@ -44,7 +50,27 @@ impl VM {
         VM {
             instructions: bytecode.instructions.clone(),
             constants: bytecode.constants.clone(),
+            globals: Rc::new(RefCell::new(vec![Object::Null; GLOBAL_SIZE])),
             stack: vec![Object::Null; STACK_SIZE],
+            sp: 0,
+        }
+    }
+
+    pub fn new_with_globals_store(
+        bytecode: Bytecode,
+        globals: Rc<RefCell<Vec<Object>>>,
+    ) -> Self {
+        let mut stack = Vec::with_capacity(STACK_SIZE);
+        // Pre-fill the stack so that we can easily put values with stack pointer.
+        for _ in 0..STACK_SIZE {
+            stack.push(Object::Null);
+        }
+
+        VM {
+            instructions: bytecode.instructions.clone(),
+            constants: bytecode.constants,
+            globals,
+            stack,
             sp: 0,
         }
     }
@@ -118,6 +144,17 @@ impl VM {
                 }
                 OPNULL => {
                     self.push(Object::Null)?;
+                }
+                OPSETGLOBAL => {
+                    let global_index = read_u16(&self.instructions.0[ip + 1..ip + 3]) as usize;
+                    ip += 2;
+                    self.globals.borrow_mut()[global_index] = self.pop();
+                }
+                OPGETGLOBAL => {
+                    let global_index = read_u16(&self.instructions.0[ip + 1..ip + 3]) as usize;
+                    ip += 2;
+                    let value = self.globals.borrow()[global_index].clone();
+                    let _ = self.push(value);
                 }
                 _ => {
                     return Err(format!("unknown opcode: {}", op));
@@ -427,6 +464,17 @@ mod tests {
             VmTestCase { input: "if (1 > 2) { 10 }", expected: Object::Null },
             VmTestCase { input: "if (false) { 10 }", expected: Object::Null },
             VmTestCase { input: "if ((if (false) { 10 })) { 10 } else { 20 }", expected: Object::Int(20) },
+        ];
+
+        run_vm_tests(&tests);
+    }
+
+    #[test]
+    fn test_global_let_statements() {
+        let tests = [
+            VmTestCase { input: "let one = 1; one", expected: Object::Int(1) },
+            VmTestCase { input: "let one = 1; let two = 2; one + two", expected: Object::Int(3) },
+            VmTestCase { input: "let one = 1; let two = one + one; one + two", expected: Object::Int(3) },
         ];
 
         run_vm_tests(&tests);

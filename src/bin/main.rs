@@ -8,6 +8,7 @@ use monkey::evaluator::Evaluator;
 use monkey::lexer::Lexer;
 use monkey::parser::Parser;
 use monkey::vm::VM;
+use monkey::compiler::symbol_table::SymbolTable;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::cell::RefCell;
@@ -30,6 +31,9 @@ fn main() {
     );
 
     let mut evaluator = Evaluator::new(Rc::new(RefCell::new(env)));
+    let mut constants = Rc::new(RefCell::new(Vec::new()));
+    let globals = Rc::new(RefCell::new(vec![Object::Null; monkey::vm::GLOBAL_SIZE]));
+    let symbol_table = Rc::new(RefCell::new(SymbolTable::new()));
 
     loop {
         match rl.readline(">> ") {
@@ -50,14 +54,15 @@ fn main() {
                 evaluator.define_macros(&mut program);
                 let expanded = evaluator.expand_macros(program);
                 
-                let mut compiler = Compiler::new();
+                let mut compiler = Compiler::new_with_state(symbol_table.clone(), constants.clone());
                 if let Err(e) = compiler.compile(&expanded) {
                     println!("Compiler error: {}", e);
                     continue;
                 }
                 
                 let bytecode = compiler.bytecode();
-                let mut vm = VM::new(&bytecode);
+                constants = compiler.constants.clone();
+                let mut vm = VM::new_with_globals_store(bytecode, globals.clone());
                 
                 if let Err(e) = vm.run() {
                     println!("VM error: {}", e);

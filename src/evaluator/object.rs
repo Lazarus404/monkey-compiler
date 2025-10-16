@@ -1,5 +1,6 @@
 use crate::evaluator::env::*;
 use crate::parser::ast::*;
+use crate::code::Instructions;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -16,6 +17,7 @@ pub enum Object {
     Array(Vec<Object>),
     Hash(HashMap<Object, Object>),
     Function(Vec<Identity>, BlockStmt, Rc<RefCell<Env>>),
+    CompiledFunction(Instructions, usize, usize),
     Builtin(i32, BuiltinFunc),
     Null,
     ReturnValue(Box<Object>),
@@ -63,6 +65,9 @@ impl fmt::Display for Object {
                 }
                 write!(f, "fn({}) {{ ... }}", result)
             }
+            Object::CompiledFunction(ref instructions, _, _) => {
+                write!(f, "<compiled function {}>", instructions.len())
+            }
             Object::Builtin(_, _) => write!(f, "[builtin function]"),
             Object::Null => write!(f, "null"),
             Object::ReturnValue(ref value) => write!(f, "{}", value),
@@ -92,6 +97,17 @@ impl Hash for Object {
             Object::Bool(ref b) => b.hash(state),
             Object::String(ref s) => s.hash(state),
             _ => "".hash(state),
+        }
+    }
+}
+
+impl Object {
+    pub fn hash_key(&self) -> Result<Object, String> {
+        match self {
+            Object::Int(i) => Ok(Object::Int(*i)),
+            Object::Bool(b) => Ok(Object::Bool(*b)),
+            Object::String(s) => Ok(Object::String(s.clone())),
+            _ => Err(format!("unusable as hash key: {:?}", self)),
         }
     }
 }

@@ -50,6 +50,14 @@ pub const OPJUMP: Opcode = 18;
 pub const OPNULL: Opcode = 19;
 pub const OPGETGLOBAL: Opcode = 20;
 pub const OPSETGLOBAL: Opcode = 21;
+pub const OPARRAY: Opcode = 22;
+pub const OPHASH: Opcode = 23;
+pub const OPINDEX: Opcode = 24;
+pub const OPCALL: Opcode = 25;
+pub const OPRETURNVALUE: Opcode = 26;
+pub const OPRETURN: Opcode = 27;
+pub const OPGETLOCAL: Opcode = 28;
+pub const OPSETLOCAL: Opcode = 29;
 
 pub struct Definition {
     pub name: String,
@@ -147,6 +155,38 @@ static DEFINITIONS: Lazy<std::collections::HashMap<Opcode, Definition>> = Lazy::
         name: "OpSetGlobal".to_string(),
         operand_widths: vec![2],
     });
+    m.insert(OPARRAY, Definition {
+        name: "OpArray".to_string(),
+        operand_widths: vec![2],
+    });
+    m.insert(OPHASH, Definition {
+        name: "OpHash".to_string(),
+        operand_widths: vec![2],
+    });
+    m.insert(OPINDEX, Definition {
+        name: "OpIndex".to_string(),
+        operand_widths: vec![],
+    });
+    m.insert(OPCALL, Definition {
+        name: "OpCall".to_string(),
+        operand_widths: vec![1],
+    });
+    m.insert(OPRETURNVALUE, Definition {
+        name: "OpReturnValue".to_string(),
+        operand_widths: vec![],
+    });
+    m.insert(OPRETURN, Definition {
+        name: "OpReturn".to_string(),
+        operand_widths: vec![],
+    });
+    m.insert(OPGETLOCAL, Definition {
+        name: "OpGetLocal".to_string(),
+        operand_widths: vec![1],
+    });
+    m.insert(OPSETLOCAL, Definition {
+        name: "OpSetLocal".to_string(),
+        operand_widths: vec![1],
+    });
     m
 });
 
@@ -243,6 +283,9 @@ pub fn make(op: Opcode, operands: &[i32]) -> Instructions {
                 instruction[offset] = (val >> 8) as u8;
                 instruction[offset + 1] = (val & 0xff) as u8;
             }
+            1 => {
+                instruction[offset] = *o as u8;
+            }
             _ => {}
         }
         offset += width;
@@ -261,6 +304,10 @@ pub fn read_operands(def: &Definition, ins: &[u8]) -> (Vec<i32>, usize) {
                 let val = read_u16(&ins[offset..offset + 2]);
                 operands.push(val as i32);
             }
+            1 => {
+                let val = read_u8(&ins[offset]);
+                operands.push(val);
+            }
             _ => {}
         }
         offset += *width;
@@ -269,10 +316,13 @@ pub fn read_operands(def: &Definition, ins: &[u8]) -> (Vec<i32>, usize) {
     (operands, offset)
 }
 
+pub fn read_u8(ins: &u8) -> i32 {
+    *ins as i32
+}
+
 pub fn read_u16(ins: &[u8]) -> u16 {
     ((ins[0] as u16) << 8) | (ins[1] as u16)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -291,6 +341,16 @@ mod tests {
                 op: OPCONSTANT,
                 operands: vec![65534],
                 expected: vec![OPCONSTANT, 255, 254],
+            },
+            TestCase {
+                op: OPGETLOCAL,
+                operands: vec![255],
+                expected: vec![OPGETLOCAL, 255],
+            },
+            TestCase {
+                op: OPSETLOCAL,
+                operands: vec![255],
+                expected: vec![OPSETLOCAL, 255],
             },
         ];
 
@@ -320,6 +380,7 @@ mod tests {
         // Prepare instructions
         let instructions = vec![
             make(OPADD, &[]),
+            make(OPGETLOCAL, &[1]),
             make(OPCONSTANT, &[2]),
             make(OPCONSTANT, &[65535]),
         ];
@@ -331,7 +392,7 @@ mod tests {
         }
 
         // Expected string
-        let expected = "0000 OpAdd\n0001 OpConstant 2\n0004 OpConstant 65535\n";
+        let expected = "0000 OpAdd\n0001 OpGetLocal 1\n0003 OpConstant 2\n0006 OpConstant 65535\n";
 
         // Use the Instructions::to_string() or similar method
         let got = instructions_to_string(&concatted);
@@ -356,6 +417,11 @@ mod tests {
                 op: OPCONSTANT,
                 operands: vec![65535],
                 bytes_read: 2,
+            },
+            TestCase {
+                op: OPGETLOCAL,
+                operands: vec![255],
+                bytes_read: 1,
             },
         ];
 

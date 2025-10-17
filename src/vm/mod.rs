@@ -1022,4 +1022,163 @@ mod tests {
 
         run_vm_tests(&tests);
     }
+
+    #[test]
+    fn test_function_calls() {
+        let tests = [
+            VmTestCase {
+                input: r#"
+                    fn() { 24 }();
+                "#,
+                expected: Object::Int(24),
+            },
+            VmTestCase {
+                input: r#"
+                    let noArg = fn() { 24 };
+                    noArg();
+                "#,
+                expected: Object::Int(24),
+            },
+            VmTestCase {
+                input: r#"
+                    let oneArg = fn(a) { a };
+                    oneArg(24);
+                "#,
+                expected: Object::Int(24),
+            },
+            VmTestCase {
+                input: r#"
+                    let manyArg = fn(a, b, c) { a; b; c };
+                    manyArg(24, 25, 26);
+                "#,
+                expected: Object::Int(26),
+            },
+        ];
+
+        run_vm_tests(&tests);
+    }
+
+    #[test]
+    fn test_calling_functions_with_arguments_and_bindings() {
+        let tests = [
+            VmTestCase {
+                input: r#"
+                    let identity = fn(a) { a; };
+                    identity(4);
+                "#,
+                expected: Object::Int(4),
+            },
+            VmTestCase {
+                input: r#"
+                    let sum = fn(a, b) { a + b; };
+                    sum(1, 2);
+                "#,
+                expected: Object::Int(3),
+            },
+            VmTestCase {
+                input: r#"
+                    let sum = fn(a, b) {
+                        let c = a + b;
+                        c;
+                    };
+                    sum(1, 2);
+                "#,
+                expected: Object::Int(3),
+            },
+            VmTestCase {
+                input: r#"
+                    let sum = fn(a, b) {
+                        let c = a + b;
+                        c;
+                    };
+                    sum(1, 2) + sum(3, 4);
+                "#,
+                expected: Object::Int(10),
+            },
+            VmTestCase {
+                input: r#"
+                    let sum = fn(a, b) {
+                        let c = a + b;
+                        c;
+                    };
+                    let outer = fn() {
+                        sum(1, 2) + sum(3, 4);
+                    };
+                    outer();
+                "#,
+                expected: Object::Int(10),
+            },
+            VmTestCase {
+                input: r#"
+                    let globalNum = 10;
+
+                    let sum = fn(a, b) {
+                        let c = a + b;
+                        c + globalNum;
+                    };
+
+                    let outer = fn() {
+                        sum(1, 2) + sum(3, 4) + globalNum;
+                    };
+
+                    outer() + globalNum;
+                "#,
+                expected: Object::Int(50),
+            },
+        ];
+
+        run_vm_tests(&tests);
+    }
+
+    #[test]
+    fn test_calling_functions_with_wrong_arguments() {
+        let tests = [
+            VmTestCase {
+                input: r#"fn() { 1; }(1);"#,
+                expected: Object::String("wrong number of arguments: want=0, got=1".to_string()),
+            },
+            VmTestCase {
+                input: r#"fn(a) { a; }();"#,
+                expected: Object::String("wrong number of arguments: want=1, got=0".to_string()),
+            },
+            VmTestCase {
+                input: r#"fn(a, b) { a + b; }(1);"#,
+                expected: Object::String("wrong number of arguments: want=2, got=1".to_string()),
+            },
+        ];
+
+        for tt in tests.iter() {
+            let program = parse(tt.input);
+
+            let mut compiler = Compiler::new();
+            if let Err(e) = compiler.compile(&program) {
+                panic!("compiler error: {}", e);
+            }
+
+            let bytecode = compiler.bytecode();
+            let mut vm = super::VM::new(&bytecode);
+
+            let res = vm.run();
+            match &tt.expected {
+                Object::String(expected_error) => {
+                    match res {
+                        Ok(_) => panic!("expected VM error but resulted in none."),
+                        Err(got) => {
+                            assert_eq!(
+                                expected_error, &got,
+                                "wrong VM error: want={:?}, got={:?}", expected_error, got
+                            );
+                        }
+                    }
+                }
+                expected => {
+                    if let Err(e) = res {
+                        panic!("unexpected vm error: {}", e);
+                    }
+                    let stack_elem = vm.last_popped_stack_elem();
+                    test_expected_object(expected.clone(), stack_elem);
+                }
+            }
+        }
+    }
 }

@@ -1,5 +1,5 @@
 use crate::code::Instructions;
-use crate::evaluator::object::Object;
+use crate::object::Object;
 
 #[derive(Clone, Debug)]
 pub struct Frame {

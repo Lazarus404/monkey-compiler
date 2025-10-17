@@ -5,6 +5,7 @@ use std::cell::RefCell;
 pub enum SymbolScope {
     Global,
     Local,
+    Builtin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,7 +17,7 @@ pub struct Symbol {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SymbolTable {
-    pub outer: Option<std::rc::Rc<std::cell::RefCell<SymbolTable>>>,
+    pub outer: Option<Rc<RefCell<SymbolTable>>>,
     store: std::collections::HashMap<String, Symbol>,
     pub num_definitions: usize,
 }
@@ -30,7 +31,7 @@ impl SymbolTable {
         }
     }
 
-    pub fn new_enclosed(outer: std::rc::Rc<std::cell::RefCell<SymbolTable>>) -> Self {
+    pub fn new_enclosed(outer: Rc<RefCell<SymbolTable>>) -> Self {
         SymbolTable {
             outer: Some(outer),
             store: std::collections::HashMap::new(),
@@ -56,6 +57,17 @@ impl SymbolTable {
         symbol
     }
 
+    pub fn define_builtin(&mut self, index: usize, name: String) -> Symbol {
+        let symbol = Symbol {
+            name: name.clone(),
+            scope: SymbolScope::Builtin,
+            index,
+        };
+
+        self.store.insert(name, symbol.clone());
+        symbol
+    }
+
     pub fn resolve(&self, name: &str) -> Option<Symbol> {
         if let Some(symbol) = self.store.get(name) {
             Some(symbol.clone())
@@ -67,7 +79,7 @@ impl SymbolTable {
         }
     }
 
-    pub fn get_outer(&self) -> Option<std::rc::Rc<std::cell::RefCell<SymbolTable>>> {
+    pub fn get_outer(&self) -> Option<Rc<RefCell<SymbolTable>>> {
         self.outer.clone()
     }
 
@@ -79,9 +91,6 @@ mod tests {
 
     #[test]
     fn test_define() {
-        use std::rc::Rc;
-        use std::cell::RefCell;
-        
         let mut expected = std::collections::HashMap::new();
         expected.insert("a".to_string(), Symbol {
             name: "a".to_string(),
@@ -321,6 +330,62 @@ mod tests {
                 let result = result.unwrap();
                 assert_eq!(
                     result, sym,
+                    "expected {} to resolve to {:?}, got={:?}",
+                    sym.name, sym, result
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_define_resolve_builtins() {
+        use super::*;
+
+        // Create global and nested symbol tables
+        let global = Rc::new(RefCell::new(SymbolTable::new()));
+        let first_local = SymbolTable::new_enclosed(Rc::clone(&global));
+        let second_local = SymbolTable::new_enclosed(Rc::new(RefCell::new(first_local.clone())));
+
+        // Expected builtin symbols
+        let expected = vec![
+            Symbol {
+                name: "a".to_string(),
+                scope: SymbolScope::Builtin,
+                index: 0,
+            },
+            Symbol {
+                name: "c".to_string(),
+                scope: SymbolScope::Builtin,
+                index: 1,
+            },
+            Symbol {
+                name: "e".to_string(),
+                scope: SymbolScope::Builtin,
+                index: 2,
+            },
+            Symbol {
+                name: "f".to_string(),
+                scope: SymbolScope::Builtin,
+                index: 3,
+            },
+        ];
+
+        // Define builtins in the global symbol table
+        for (i, sym) in expected.iter().enumerate() {
+            global.borrow_mut().define_builtin(i, sym.name.clone());
+        }
+
+        // Test resolution in all tables
+        let tables = vec![Rc::clone(&global), Rc::clone(&Rc::new(RefCell::new(first_local))), Rc::clone(&Rc::new(RefCell::new(second_local)))];
+        for table in tables.iter() {
+            for sym in &expected {
+                let result = table.borrow().resolve(&sym.name);
+                if result.is_none() {
+                    panic!("name {} not resolvable", sym.name);
+                }
+                let result = result.unwrap();
+                assert_eq!(
+                    result, *sym,
                     "expected {} to resolve to {:?}, got={:?}",
                     sym.name, sym, result
                 );

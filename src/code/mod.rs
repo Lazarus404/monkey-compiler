@@ -58,6 +58,7 @@ pub const OPRETURNVALUE: Opcode = 26;
 pub const OPRETURN: Opcode = 27;
 pub const OPGETLOCAL: Opcode = 28;
 pub const OPSETLOCAL: Opcode = 29;
+pub const OPBUILTIN: Opcode = 30;
 
 pub struct Definition {
     pub name: String,
@@ -185,6 +186,10 @@ static DEFINITIONS: Lazy<std::collections::HashMap<Opcode, Definition>> = Lazy::
     });
     m.insert(OPSETLOCAL, Definition {
         name: "OpSetLocal".to_string(),
+        operand_widths: vec![1],
+    });
+    m.insert(OPBUILTIN, Definition {
+        name: "OpBuiltin".to_string(),
         operand_widths: vec![1],
     });
     m

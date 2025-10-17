@@ -1,10 +1,9 @@
-pub mod builtins;
 pub mod env;
-pub mod object;
+pub mod builtins;
 
 use crate::parser::ast::*;
+use crate::object::*;
 use env::*;
-use object::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -394,6 +393,47 @@ impl Evaluator {
         }
 
         Object::Hash(hash)
+    }
+
+    #[allow(dead_code)]
+    fn apply_function(&mut self, func: Object, args: Vec<Object>) -> Object {
+        match func {
+            Object::Function(params, body, env) => {
+                let extended_env = self.extend_function_env(&Object::Function(params.clone(), body.clone(), env.clone()), args);
+                let mut evaluator = Evaluator::new(Rc::new(RefCell::new(extended_env)));
+                let result = evaluator.eval((*body).to_vec());
+                Self::unwrap_return_value(result.unwrap_or(Object::Null))
+            }
+            Object::Builtin(_, builtin_func) => {
+                let result = builtin_func(args);
+                result
+            }
+            other => {
+                Self::error(format!("not a function: {}", other.r#type()))
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn extend_function_env(&self, function: &Object, args: Vec<Object>) -> Env {
+        match function {
+            Object::Function(params, _, env) => {
+                let mut new_env = Env::new_with_outer(Rc::clone(env));
+                for (param, arg) in params.iter().zip(args.into_iter()) {
+                    new_env.set(param.0.clone(), &arg);
+                }
+                new_env
+            }
+            _ => panic!("Expected Function object"),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn unwrap_return_value(obj: Object) -> Object {
+        match obj {
+            Object::ReturnValue(val) => *val,
+            obj => obj,
+        }
     }
 
     fn quote_expr(&mut self, expr: Expr) -> Object {
@@ -940,7 +980,7 @@ mod tests {
             (
                 "len(1)",
                 Some(Object::Error(String::from(
-                    "argument to `len` not supported, got 1",
+                    "argument to `len` not supported, got INTEGER",
                 ))),
             ),
             (
@@ -961,13 +1001,13 @@ mod tests {
             (
                 "first(\"string\")",
                 Some(Object::Error(String::from(
-                    "argument to `first` must be array. got string",
+                    "argument to `first` must be ARRAY, got STRING",
                 ))),
             ),
             (
                 "first(1)",
                 Some(Object::Error(String::from(
-                    "argument to `first` must be array. got 1",
+                    "argument to `first` must be ARRAY, got INTEGER",
                 ))),
             ),
             // last
@@ -982,13 +1022,13 @@ mod tests {
             (
                 "last(\"string\")",
                 Some(Object::Error(String::from(
-                    "argument to `last` must be array. got string",
+                    "argument to `last` must be ARRAY, got STRING",
                 ))),
             ),
             (
                 "last(1)",
                 Some(Object::Error(String::from(
-                    "argument to `last` must be array. got 1",
+                    "argument to `last` must be ARRAY, got INTEGER",
                 ))),
             ),
             // rest
@@ -1015,13 +1055,13 @@ mod tests {
             (
                 "rest(\"string\")",
                 Some(Object::Error(String::from(
-                    "argument to `rest` must be array. got string",
+                    "argument to `rest` must be ARRAY, got STRING",
                 ))),
             ),
             (
                 "rest(1)",
                 Some(Object::Error(String::from(
-                    "argument to `rest` must be array. got 1",
+                    "argument to `rest` must be ARRAY, got INTEGER",
                 ))),
             ),
             // push
@@ -1048,13 +1088,13 @@ mod tests {
             (
                 "push(\"string\", 1)",
                 Some(Object::Error(String::from(
-                    "argument to `push` must be array. got string",
+                    "argument to `push` must be ARRAY, got STRING",
                 ))),
             ),
             (
                 "push(1, 1)",
                 Some(Object::Error(String::from(
-                    "argument to `push` must be array. got 1",
+                    "argument to `push` must be ARRAY, got INTEGER",
                 ))),
             ),
         ];

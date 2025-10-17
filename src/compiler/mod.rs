@@ -1,5 +1,6 @@
 pub mod symbol_table;
 use symbol_table::SymbolTable;
+use crate::object::builtins::BUILTINS;
 use std::rc::Rc;
 use std::cell::RefCell;
 
@@ -38,8 +39,9 @@ use crate::code::{
     OPRETURN,
     OPGETLOCAL,
     OPSETLOCAL,
+    OPBUILTIN,
 };
-use crate::evaluator::object::Object;
+use crate::object::Object;
 
 pub struct CompilationScope {
     pub instructions: Instructions,
@@ -62,9 +64,15 @@ impl Compiler {
             previous_instruction: EmittedInstruction::new(),
         };
 
+        let symbol_table = Rc::new(RefCell::new(SymbolTable::new()));
+
+        for (i, builtin) in BUILTINS.iter().enumerate() {
+            symbol_table.borrow_mut().define_builtin(i, builtin.name.to_string());
+        }
+
         Compiler {
             constants: Rc::new(RefCell::new(vec![])),
-            symbol_table: Rc::new(RefCell::new(SymbolTable::new())),
+            symbol_table: symbol_table,
             scopes: vec![main_scope],
             scope_index: 0,
         }
@@ -251,6 +259,9 @@ impl Compiler {
                         }
                         crate::compiler::symbol_table::SymbolScope::Local => {
                             self.emit(OPGETLOCAL, &[symbol.index as i32]);
+                        }
+                        crate::compiler::symbol_table::SymbolScope::Builtin => {
+                            self.emit(OPBUILTIN, &[symbol.index as i32]);
                         }
                     }
                 } else {
@@ -465,7 +476,7 @@ mod tests {
     use crate::parser::ast;
     use crate::lexer;
     use crate::parser;
-    use crate::evaluator::object::Object;
+    use crate::object::Object;
     use std::rc::Rc;
     use crate::code::{
         self, 
@@ -1248,6 +1259,47 @@ mod tests {
             "previous_instruction.opcode wrong. got={:?}, want={:?}",
             previous.opcode, OPMULT
         );
+    }
+
+    #[test]
+    fn test_builtins() {
+        let tests = vec![
+            CompilerTestCase {
+                input: "
+                    len([]);
+                    push([], 1);
+                ",
+                expected_constants: vec![Object::Int(1)],
+                expected_instructions: vec![
+                    Instructions(vec![crate::code::OPBUILTIN, 0]),
+                    Instructions(vec![crate::code::OPARRAY, 0, 0]),
+                    Instructions(vec![crate::code::OPCALL, 1]),
+                    Instructions(vec![crate::code::OPPOP]),
+                    Instructions(vec![crate::code::OPBUILTIN, 5]),
+                    Instructions(vec![crate::code::OPARRAY, 0, 0]),
+                    Instructions(vec![crate::code::OPCONSTANT, 0, 0]),
+                    Instructions(vec![crate::code::OPCALL, 2]),
+                    Instructions(vec![crate::code::OPPOP]),
+                ],
+            },
+            CompilerTestCase {
+                input: "fn() { len([]) }",
+                expected_constants: vec![
+                    Object::CompiledFunction(Instructions(vec![
+                        crate::code::OPBUILTIN, 0,
+                        crate::code::OPARRAY, 0, 0,
+                        crate::code::OPCALL, 1,
+                        crate::code::OPRETURNVALUE,
+                    ]), 0, 0),
+                ],
+                expected_instructions: vec![
+                    Instructions(vec![crate::code::OPCONSTANT, 0, 0]),
+                    Instructions(vec![crate::code::OPPOP]),
+                ],
+            },
+        ];
+
+        run_compiler_tests(tests);
     }
 
     fn run_compiler_tests(tests: Vec<CompilerTestCase>) {

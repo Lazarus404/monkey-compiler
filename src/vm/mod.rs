@@ -1,7 +1,8 @@
 pub mod frame;
 use std::rc::Rc;
 use std::cell::RefCell;
-use crate::evaluator::object::Object;
+use crate::object::Object;
+use crate::object::builtins::BUILTINS;
 use crate::vm::frame::Frame;
 use crate::compiler::Bytecode;
 use crate::code::{
@@ -33,6 +34,7 @@ use crate::code::{
     OPCALL,
     OPRETURNVALUE,
     OPRETURN,
+    OPBUILTIN,
     OPGETLOCAL,
     OPSETLOCAL,
     read_u16, 
@@ -236,16 +238,16 @@ impl VM {
                     }
                 }
                 OPCALL => {
-                    // Match Go: numArgs := code.ReadUint8(ins[ip+1:])
-                    let num_args = self.current_frame().instructions().0[ip + 1] as u8;
+                    let num_args = self.current_frame().instructions().0[ip + 1] as usize;
                     self.current_frame_mut().ip += 1;
 
-                    let err = self.call_function(num_args as usize);
-                    if let Some(e) = err.err() {
-                        return Err(e);
+                    let switched_frame = self.execute_call(num_args)?;
+
+                    // Only skip IP increment if we switched frames (compiled function)
+                    if switched_frame {
+                        continue;
                     }
-                    // Don't increment IP after this instruction since we switched frames
-                    continue;
+                    // For builtins, we didn't switch frames, so let IP increment normally
                 }
                 OPRETURNVALUE => {
                     let return_value = self.pop();
@@ -264,6 +266,19 @@ impl VM {
 
                     let err = self.push(Object::Null);
                     if let Err(e) = err {
+                        return Err(e);
+                    }
+                }
+                OPBUILTIN => {
+                    // Read the builtin index from the next instruction byte
+                    let builtin_index = self.current_frame().instructions().0[ip + 1] as usize;
+                    self.current_frame_mut().ip += 1;
+
+                    // Get the definition from the builtins list
+                    let definition = &BUILTINS[builtin_index];
+
+                    // Push the Builtin object onto the stack
+                    if let Err(e) = self.push(Object::Builtin(0, definition.builtin.function.0)) {
                         return Err(e);
                     }
                 }
@@ -549,6 +564,21 @@ impl VM {
         Ok(())
     }
 
+    fn call_builtin(&mut self, builtin_fn: fn(Vec<Object>) -> Object, num_args: usize) -> Result<(), String> {
+        // Arguments are at stack[sp - num_args .. sp]
+        let args = self.stack[self.sp - num_args .. self.sp].to_vec();
+
+        let result = builtin_fn(args);
+        
+        // Remove the arguments and the builtin function from the stack
+        self.sp = self.sp - num_args - 1;
+
+        // Push the result
+        self.push(result)?;
+
+        Ok(())
+    }
+
     fn push_frame(&mut self, frame: Frame) {
         if self.frames_index < self.frames.len() {
             self.frames[self.frames_index] = frame;
@@ -564,6 +594,26 @@ impl VM {
         } else {
             self.frames_index -= 1;
             Some(self.frames.remove(self.frames_index))
+        }
+    }
+
+    fn execute_call(&mut self, num_args: usize) -> Result<bool, String> {
+        // The callee is at stack[sp - 1 - num_args]
+        let callee_pos = self.sp - 1 - num_args;
+        let callee_obj = self.stack.get(callee_pos).cloned().ok_or_else(|| {
+            "no function found at call position".to_string()
+        })?;
+
+        match callee_obj {
+            Object::CompiledFunction(_, _, _) => {
+                self.call_function(num_args)?;
+                Ok(true) // Switched frames
+            }
+            Object::Builtin(_, builtin_fn) => {
+                self.call_builtin(builtin_fn, num_args)?;
+                Ok(false) // Didn't switch frames
+            }
+            _ => Err("calling non-function and non-built-in".to_string()),
         }
     }
     
@@ -588,7 +638,7 @@ mod tests {
     use crate::compiler::Compiler;
     use crate::lexer::Lexer;
     use crate::parser::Parser;
-    use crate::evaluator::object::Object;
+    use crate::object::Object;
     use std::collections::HashMap;
 
     #[derive(Clone)]
@@ -1177,6 +1227,159 @@ mod tests {
                     }
                     let stack_elem = vm.last_popped_stack_elem();
                     test_expected_object(expected.clone(), stack_elem);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_builtin_functions() {
+        use crate::object::Object;
+
+        #[derive(Clone)]
+        enum Expected {
+            Int(i64),
+            Null,
+            String(String),
+            Array(Vec<Object>),
+        }
+
+        struct BuiltinVmTestCase<'a> {
+            input: &'a str,
+            expected: Expected,
+        }
+
+        // Helper to allow brevity in test definition
+        fn err(msg: &str) -> Expected {
+            Expected::String(msg.to_string())
+        }
+
+        let tests = [
+            BuiltinVmTestCase {
+                input: r#"len("")"#,
+                expected: Expected::Int(0),
+            },
+            BuiltinVmTestCase {
+                input: r#"len("four")"#,
+                expected: Expected::Int(4),
+            },
+            BuiltinVmTestCase {
+                input: r#"len("hello world")"#,
+                expected: Expected::Int(11),
+            },
+            BuiltinVmTestCase {
+                input: r#"len(1)"#,
+                expected: err("argument to `len` not supported, got INTEGER"),
+            },
+            BuiltinVmTestCase {
+                input: r#"len("one", "two")"#,
+                expected: err("wrong number of arguments. got=2, want=1"),
+            },
+            BuiltinVmTestCase {
+                input: r#"len([1, 2, 3])"#,
+                expected: Expected::Int(3),
+            },
+            BuiltinVmTestCase {
+                input: r#"len([])"#,
+                expected: Expected::Int(0),
+            },
+            BuiltinVmTestCase {
+                input: r#"puts("hello", "world!")"#,
+                expected: Expected::Null,
+            },
+            BuiltinVmTestCase {
+                input: r#"first([1, 2, 3])"#,
+                expected: Expected::Int(1),
+            },
+            BuiltinVmTestCase {
+                input: r#"first([])"#,
+                expected: Expected::Null,
+            },
+            BuiltinVmTestCase {
+                input: r#"first(1)"#,
+                expected: err("argument to `first` must be ARRAY, got INTEGER"),
+            },
+            BuiltinVmTestCase {
+                input: r#"last([1, 2, 3])"#,
+                expected: Expected::Int(3),
+            },
+            BuiltinVmTestCase {
+                input: r#"last([])"#,
+                expected: Expected::Null,
+            },
+            BuiltinVmTestCase {
+                input: r#"last(1)"#,
+                expected: err("argument to `last` must be ARRAY, got INTEGER"),
+            },
+            BuiltinVmTestCase {
+                input: r#"rest([1, 2, 3])"#,
+                expected: Expected::Array(vec![Object::Int(2), Object::Int(3)]),
+            },
+            BuiltinVmTestCase {
+                input: r#"rest([])"#,
+                expected: Expected::Null,
+            },
+            BuiltinVmTestCase {
+                input: r#"push([], 1)"#,
+                expected: Expected::Array(vec![Object::Int(1)]),
+            },
+            BuiltinVmTestCase {
+                input: r#"push(1, 1)"#,
+                expected: err("argument to `push` must be ARRAY, got INTEGER"),
+            },
+        ];
+
+        for tt in tests.iter() {
+            let program = parse(tt.input);
+
+            let mut compiler = Compiler::new();
+            if let Err(e) = compiler.compile(&program) {
+                panic!("compiler error: {}", e);
+            }
+
+            let bytecode = compiler.bytecode();
+            let mut vm = super::VM::new(&bytecode);
+
+            let res = vm.run();
+
+            match &tt.expected {
+                Expected::String(expected_error) => {
+                    // Builtin errors are Object::Error on the stack, not VM errors
+                    if let Err(e) = res {
+                        panic!("unexpected vm error: {}", e);
+                    }
+                    let stack_elem = vm.last_popped_stack_elem();
+                    match stack_elem {
+                        Object::Error(got) => assert_eq!(expected_error, got, "wrong error: want={:?}, got={:?}", expected_error, got),
+                        other => panic!("expected error object, got {:?}", other),
+                    }
+                }
+                Expected::Int(expected_value) => {
+                    if let Err(e) = res {
+                        panic!("unexpected vm error: {}", e);
+                    }
+                    let stack_elem = vm.last_popped_stack_elem();
+                    match stack_elem {
+                        Object::Int(got) => assert_eq!(*expected_value, *got, "wrong int result: want={}, got={}", expected_value, got),
+                        other => panic!("expected int object, got {:?}", other),
+                    }
+                }
+                Expected::Null => {
+                    if let Err(e) = res {
+                        panic!("unexpected vm error: {}", e);
+                    }
+                    let stack_elem = vm.last_popped_stack_elem();
+                    assert_eq!(&Object::Null, stack_elem, "expected Null, got {:?}", stack_elem);
+                }
+                Expected::Array(expected_vec) => {
+                    if let Err(e) = res {
+                        panic!("unexpected vm error: {}", e);
+                    }
+                    let stack_elem = vm.last_popped_stack_elem();
+                    match stack_elem {
+                        Object::Array(got_arr) => assert_eq!(&expected_vec[..], &got_arr[..], "expected array {:?}, got {:?}", expected_vec, got_arr),
+                        other => panic!("expected array object, got {:?}", other),
+                    }
                 }
             }
         }

@@ -3,7 +3,7 @@ extern crate monkey;
 use monkey::compiler::Compiler;
 use monkey::evaluator::builtins::new_builtins;
 use monkey::evaluator::env::Env;
-use monkey::evaluator::object::Object;
+use monkey::object::Object;
 use monkey::evaluator::Evaluator;
 use monkey::lexer::Lexer;
 use monkey::parser::Parser;

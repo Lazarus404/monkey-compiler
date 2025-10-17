@@ -1,3 +1,5 @@
+pub mod builtins;
+
 use crate::evaluator::env::*;
 use crate::parser::ast::*;
 use crate::code::Instructions;
@@ -108,6 +110,41 @@ impl Object {
             Object::Bool(b) => Ok(Object::Bool(*b)),
             Object::String(s) => Ok(Object::String(s.clone())),
             _ => Err(format!("unusable as hash key: {:?}", self)),
+        }
+    }
+
+    pub fn r#type(&self) -> &'static str {
+        match self {
+            Object::Int(_) => "INTEGER",
+            Object::String(_) => "STRING",
+            Object::Bool(_) => "BOOLEAN",
+            Object::Array(_) => "ARRAY",
+            Object::Hash(_) => "HASH",
+            Object::Function(_, _, _) => "FUNCTION",
+            Object::CompiledFunction(_, _, _) => "COMPILED_FUNCTION",
+            Object::Builtin(_, _) => "BUILTIN",
+            Object::Null => "NULL",
+            Object::ReturnValue(_) => "RETURN_VALUE",
+            Object::Error(_) => "ERROR",
+            Object::Quote(_) => "QUOTE",
+            Object::Macro(_) => "MACRO",
+        }
+    }
+
+    pub fn inspect(&self) -> String {
+        match self {
+            Object::String(s) => format!("\"{}\"", s),
+            Object::Array(arr) => {
+                let elements: Vec<String> = arr.iter().map(|e| e.inspect()).collect();
+                format!("[{}]", elements.join(", "))
+            }
+            Object::Hash(hash) => {
+                let pairs: Vec<String> = hash.iter()
+                    .map(|(k, v)| format!("{}: {}", k.inspect(), v.inspect()))
+                    .collect();
+                format!("{{{}}}", pairs.join(", "))
+            }
+            _ => format!("{}", self),
         }
     }
 }

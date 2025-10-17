@@ -11,6 +11,19 @@ use std::rc::Rc;
 
 pub type BuiltinFunc = fn(Vec<Object>) -> Object;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledFunction {
+    pub instructions: Instructions,
+    pub num_locals: usize,
+    pub num_parameters: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Closure {
+    pub func: CompiledFunction,
+    pub free: Vec<Object>,
+}
+
 #[derive(PartialEq, Clone, Debug)]
 pub enum Object {
     Int(i64),
@@ -26,6 +39,7 @@ pub enum Object {
     Error(String),
     Quote(Node),
     Macro(MacroLiteral),
+    Closure(Closure),
 }
 
 impl fmt::Display for Object {
@@ -86,6 +100,9 @@ impl fmt::Display for Object {
                     .join(", "),
                 value.body
             ),
+            Object::Closure(ref closure) => {
+                write!(f, "<closure function {}>", closure.func.instructions.len())
+            }
         }
     }
 }
@@ -128,6 +145,7 @@ impl Object {
             Object::Error(_) => "ERROR",
             Object::Quote(_) => "QUOTE",
             Object::Macro(_) => "MACRO",
+            Object::Closure(_) => "CLOSURE",
         }
     }
 

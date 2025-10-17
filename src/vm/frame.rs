@@ -20,7 +20,8 @@ impl Frame {
     pub fn instructions(&self) -> &Instructions {
         match &self.func {
             Object::CompiledFunction(instructions, _, _) => instructions,
-            _ => panic!("Expected CompiledFunction"),
+            Object::Closure(closure) => &closure.func.instructions,
+            _ => panic!("Expected CompiledFunction or Closure object"),
         }
     }
 }

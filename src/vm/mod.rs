@@ -37,6 +37,9 @@ use crate::code::{
     OPBUILTIN,
     OPGETLOCAL,
     OPSETLOCAL,
+    OPCLOSURE,
+    OPGETFREE,
+    OPCURRENTCLOSURE,
     read_u16, 
 };
 
@@ -65,14 +68,14 @@ impl VM {
         let main_frame = Frame::new(main_fn, 0);
 
         let mut frames = Vec::with_capacity(MAX_FRAMES);
-        frames.push(main_frame.clone());
+        frames.push(main_frame);
 
         VM {
             constants: bytecode.constants.clone(),
             globals: Rc::new(RefCell::new(vec![Object::Null; GLOBAL_SIZE])),
             stack: vec![Object::Null; STACK_SIZE],
             sp: 0,
-            frames: frames,
+            frames,
             frames_index: 1,
         }
     }
@@ -279,6 +282,43 @@ impl VM {
 
                     // Push the Builtin object onto the stack
                     if let Err(e) = self.push(Object::Builtin(0, definition.builtin.function.0)) {
+                        return Err(e);
+                    }
+                }
+                OPCLOSURE => {
+                    let const_index = read_u16(&self.current_frame().instructions().0[ip + 1..]) as usize;
+                    let num_free = self.current_frame().instructions().0[ip + 3] as usize;
+                    self.current_frame_mut().ip += 3;
+
+                    if let Err(err) = self.push_closure(const_index, num_free) {
+                        return Err(err);
+                    }
+                }
+                OPGETFREE => {
+                    let free_index = self.current_frame().instructions().0[ip + 1] as usize;
+                    self.current_frame_mut().ip += 1;
+
+                    let current_closure = match &self.current_frame().func {
+                        Object::Closure(closure) => closure,
+                        _ => return Err("OPGETFREE called but current frame is not a closure".to_string()),
+                    };
+
+                    if free_index >= current_closure.free.len() {
+                        return Err(format!("free index {} out of bounds", free_index));
+                    }
+
+                    let obj = current_closure.free[free_index].clone();
+                    if let Err(e) = self.push(obj) {
+                        return Err(e);
+                    }
+                }
+                OPCURRENTCLOSURE => {
+                    let current_closure = match &self.current_frame().func {
+                        Object::Closure(closure) => Object::Closure(closure.clone()),
+                        _ => return Err("OPCURRENTCLOSURE called but current frame is not a closure".to_string()),
+                    };
+
+                    if let Err(e) = self.push(current_closure) {
                         return Err(e);
                     }
                 }
@@ -579,6 +619,43 @@ impl VM {
         Ok(())
     }
 
+    fn push_closure(&mut self, const_index: usize, num_free: usize) -> Result<(), String> {
+        // Get the constant at const_index and ensure it's a CompiledFunction
+        let constant = self.constants.get(const_index)
+            .ok_or_else(|| format!("no constant at index {}", const_index))?;
+
+        let function = match constant {
+            Object::CompiledFunction(instructions, num_locals, num_params) => {
+                crate::object::CompiledFunction {
+                    instructions: instructions.clone(),
+                    num_locals: *num_locals,
+                    num_parameters: *num_params,
+                }
+            }
+            _ => {
+                return Err(format!("not a function: {:?}", constant));
+            }
+        };
+
+        // Gather free variables (they are the last num_free objects on the stack)
+        let mut free = Vec::with_capacity(num_free);
+        for i in 0..num_free {
+            let idx = self.sp - num_free + i;
+            free.push(self.stack.get(idx)
+                .cloned()
+                .unwrap_or(Object::Null));
+        }
+        // Remove the free variables from the stack
+        self.sp -= num_free;
+
+        let closure = crate::object::Closure {
+            func: function,
+            free,
+        };
+
+        self.push(Object::Closure(closure))
+    }
+
     fn push_frame(&mut self, frame: Frame) {
         if self.frames_index < self.frames.len() {
             self.frames[self.frames_index] = frame;
@@ -609,12 +686,35 @@ impl VM {
                 self.call_function(num_args)?;
                 Ok(true) // Switched frames
             }
+            Object::Closure(closure) => {
+                self.call_closure(closure, num_args)
+            }
             Object::Builtin(_, builtin_fn) => {
                 self.call_builtin(builtin_fn, num_args)?;
                 Ok(false) // Didn't switch frames
             }
             _ => Err("calling non-function and non-built-in".to_string()),
         }
+    }
+
+    fn call_closure(&mut self, closure: crate::object::Closure, num_args: usize) -> Result<bool, String> {
+        if num_args != closure.func.num_parameters {
+            return Err(format!(
+                "wrong number of arguments: want={}, got={}",
+                closure.func.num_parameters, num_args
+            ));
+        }
+
+        let frame = Frame::new(Object::Closure(closure), self.sp - num_args);
+        self.push_frame(frame);
+
+        // After pushing a new frame, set sp for new frame: base_pointer + num_locals
+        let current_frame = self.current_frame();
+        if let Object::Closure(ref closure) = current_frame.func {
+            self.sp = current_frame.base_pointer + closure.func.num_locals;
+        }
+
+        Ok(true)
     }
     
     fn native_bool_to_boolean_object(input: bool) -> Object {
@@ -1383,5 +1483,163 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_closures() {
+        let tests = [
+            VmTestCase {
+                input: r#"
+                    let newClosure = fn(a) {
+                        fn() { a; };
+                    };
+                    let closure = newClosure(99);
+                    closure();
+                "#,
+                expected: Object::Int(99),
+            },
+            VmTestCase {
+                input: r#"
+                    let newAdder = fn(a, b) {
+                        fn(c) { a + b + c };
+                    };
+                    let adder = newAdder(1, 2);
+                    adder(8);
+                "#,
+                expected: Object::Int(11),
+            },
+            VmTestCase {
+                input: r#"
+                    let newAdder = fn(a, b) {
+                        let c = a + b;
+                        fn(d) { c + d };
+                    };
+                    let adder = newAdder(1, 2);
+                    adder(8);
+                "#,
+                expected: Object::Int(11),
+            },
+            VmTestCase {
+                input: r#"
+                    let newAdderOuter = fn(a, b) {
+                        let c = a + b;
+                        fn(d) {
+                            let e = d + c;
+                            fn(f) { e + f; };
+                        };
+                    };
+                    let newAdderInner = newAdderOuter(1, 2);
+                    let adder = newAdderInner(3);
+                    adder(8);
+                "#,
+                expected: Object::Int(14),
+            },
+            VmTestCase {
+                input: r#"
+                    let a = 1;
+                    let newAdderOuter = fn(b) {
+                        fn(c) {
+                            fn(d) { a + b + c + d };
+                        };
+                    };
+                    let newAdderInner = newAdderOuter(2);
+                    let adder = newAdderInner(3);
+                    adder(8);
+                "#,
+                expected: Object::Int(14),
+            },
+            VmTestCase {
+                input: r#"
+                    let newClosure = fn(a, b) {
+                        let one = fn() { a; };
+                        let two = fn() { b; };
+                        fn() { one() + two(); };
+                    };
+                    let closure = newClosure(9, 90);
+                    closure();
+                "#,
+                expected: Object::Int(99),
+            },
+        ];
+
+        run_vm_tests(&tests);
+    }
+
+    #[test]
+    fn test_recursive_functions() {
+        let tests = [
+            VmTestCase {
+                input: r#"
+                    let countDown = fn(x) {
+                        if (x == 0) {
+                            return 0;
+                        } else {
+                            countDown(x - 1);
+                        }
+                    };
+                    countDown(1);
+                "#,
+                expected: Object::Int(0),
+            },
+            VmTestCase {
+                input: r#"
+                    let countDown = fn(x) {
+                        if (x == 0) {
+                            return 0;
+                        } else {
+                            countDown(x - 1);
+                        }
+                    };
+                    let wrapper = fn() {
+                        countDown(1);
+                    };
+                    wrapper();
+                "#,
+                expected: Object::Int(0),
+            },
+            VmTestCase {
+                input: r#"
+                    let wrapper = fn() {
+                        let countDown = fn(x) {
+                            if (x == 0) {
+                                return 0;
+                            } else {
+                                countDown(x - 1);
+                            }
+                        };
+                        countDown(1);
+                    };
+                    wrapper();
+                "#,
+                expected: Object::Int(0),
+            },
+        ];
+
+        run_vm_tests(&tests);
+    }
+
+    #[test]
+    fn test_recursive_fibonacci() {
+        let tests = vec![
+            VmTestCase {
+                input: r#"
+                    let fibonacci = fn(x) {
+                        if (x == 0) {
+                            return 0;
+                        } else {
+                            if (x == 1) {
+                                return 1;
+                            } else {
+                                fibonacci(x - 1) + fibonacci(x - 2);
+                            }
+                        }
+                    };
+                    fibonacci(15);
+                "#,
+                expected: Object::Int(610),
+            },
+        ];
+
+        run_vm_tests(&tests);
     }
 }

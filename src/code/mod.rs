@@ -59,6 +59,9 @@ pub const OPRETURN: Opcode = 27;
 pub const OPGETLOCAL: Opcode = 28;
 pub const OPSETLOCAL: Opcode = 29;
 pub const OPBUILTIN: Opcode = 30;
+pub const OPCLOSURE: Opcode = 31;
+pub const OPGETFREE: Opcode = 32;
+pub const OPCURRENTCLOSURE: Opcode = 33;
 
 pub struct Definition {
     pub name: String,
@@ -192,6 +195,18 @@ static DEFINITIONS: Lazy<std::collections::HashMap<Opcode, Definition>> = Lazy::
         name: "OpBuiltin".to_string(),
         operand_widths: vec![1],
     });
+    m.insert(OPCLOSURE, Definition {
+        name: "OpClosure".to_string(),
+        operand_widths: vec![2, 1],
+    });
+    m.insert(OPGETFREE, Definition {
+        name: "OpGetFree".to_string(),
+        operand_widths: vec![1],
+    });
+    m.insert(OPCURRENTCLOSURE, Definition {
+        name: "OpCurrentClosure".to_string(),
+        operand_widths: vec![],
+    });
     m
 });
 
@@ -245,12 +260,34 @@ impl fmt::Display for Instructions {
             };
 
             let (operands, read) = read_operands(def, &self.0[i + 1..]);
+
+            let operand_count = def.operand_widths.len();
+
+            let instr_str = if operands.len() != operand_count {
+                format!(
+                    "ERROR: operand len {} does not match defined {}\n",
+                    operands.len(),
+                    operand_count
+                )
+            } else {
+                match operand_count {
+                    0 => def.name.clone(),
+                    1 => format!("{} {}", def.name, operands[0]),
+                    2 => format!("{} {} {}", def.name, operands[0], operands[1]),
+                    _ => format!(
+                        "ERROR: unhandled operandCount for {}\n",
+                        def.name
+                    ),
+                }
+            };
+
             writeln!(
                 f,
                 "{:04} {}",
                 i,
-                Instructions::fmt_instruction(def, &operands)
+                instr_str
             )?;
+
             i += 1 + read;
         }
         Ok(())
@@ -357,6 +394,11 @@ mod tests {
                 operands: vec![255],
                 expected: vec![OPSETLOCAL, 255],
             },
+            TestCase {
+                op: OPCLOSURE,
+                operands: vec![65534, 255],
+                expected: vec![OPCLOSURE, 255, 254, 255],
+            },
         ];
 
         for tt in tests {
@@ -388,6 +430,7 @@ mod tests {
             make(OPGETLOCAL, &[1]),
             make(OPCONSTANT, &[2]),
             make(OPCONSTANT, &[65535]),
+            make(OPCLOSURE, &[65534, 255]),
         ];
 
         // Concatenate all instructions into a single Vec<u8>
@@ -397,7 +440,7 @@ mod tests {
         }
 
         // Expected string
-        let expected = "0000 OpAdd\n0001 OpGetLocal 1\n0003 OpConstant 2\n0006 OpConstant 65535\n";
+        let expected = "0000 OpAdd\n0001 OpGetLocal 1\n0003 OpConstant 2\n0006 OpConstant 65535\n0009 OpClosure 65534 255\n";
 
         // Use the Instructions::to_string() or similar method
         let got = instructions_to_string(&concatted);
@@ -427,6 +470,11 @@ mod tests {
                 op: OPGETLOCAL,
                 operands: vec![255],
                 bytes_read: 1,
+            },
+            TestCase {
+                op: OPCLOSURE,
+                operands: vec![65534, 255],
+                bytes_read: 3,
             },
         ];
 
